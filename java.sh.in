@@ -1,0 +1,12 @@
+#!/bin/sh
+set -x
+
+BIN="@CMAKE_CURRENT_BINARY_DIR@"
+SRC="@CMAKE_CURRENT_SOURCE_DIR@"
+JAVAC="@Java_JAVAC_EXECUTABLE@"
+JAVA="@Java_JAVA_EXECUTABLE@"
+DLL=`find "$BIN" -name interrupt.dll`
+DLL=`dirname "$DLL"`
+
+"$JAVAC" -Werror -d "$BIN" "$SRC/classes/*.java"
+"$JAVA" -classpath "$BIN" -Djava.library.path="$DLL" -Xcheck:jni Harness

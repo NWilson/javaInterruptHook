@@ -1,5 +1,3 @@
-package com.stackoverflow.interrupt;
-
 public class Harness {
 
 	public static void main(String[] args) {

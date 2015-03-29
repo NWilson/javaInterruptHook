@@ -109,7 +109,7 @@ static bool loadEventHandleID(JNIEnv* env, jobject nativeTask) {
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_stackoverflow_interrupt_NativeTask_wakeupTask0(JNIEnv* env, jobject this_)
+Java_NativeTask_wakeupTask0(JNIEnv* env, jobject this_)
 {
   if (!loadEventHandleID(env, this_)) return;
   JniMonitor enter(env, this_, true);
@@ -129,7 +129,7 @@ Java_com_stackoverflow_interrupt_NativeTask_wakeupTask0(JNIEnv* env, jobject thi
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_com_stackoverflow_interrupt_NativeTask_doTask0(JNIEnv* env, jobject this_)
+Java_NativeTask_doTask0(JNIEnv* env, jobject this_)
 {
   if (!loadEventHandleID(env, this_)) return JNI_FALSE;
 #ifdef WIN32

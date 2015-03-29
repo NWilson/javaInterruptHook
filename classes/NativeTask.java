@@ -1,5 +1,3 @@
-package com.stackoverflow.interrupt;
-
 import java.io.IOException;
 
 class NativeTask {
