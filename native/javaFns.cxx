@@ -26,12 +26,20 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <assert.h>
 #include <jni.h>
 
-static jboolean error(const char* fn, int error) {
-  fprintf(stderr, "%s error: %d\n", fn, error);
+static bool error(const char* fn, int num) {
+  fprintf(stderr, "%s error: %d\n", fn, num);
+  return false;
+}
+static bool error(const char* fn, const char* message) {
+  fprintf(stderr, "%s error: %s\n", fn, message);
+  return false;
+}
+static jboolean jError(const char* fn, int num) {
+  error(fn, num);
   return JNI_FALSE;
 }
-static jboolean error(const char* fn, const char* message) {
-  fprintf(stderr, "%s error: %s\n", fn, message);
+static jboolean jError(const char* fn, const char* message) {
+  error(fn, message);
   return JNI_FALSE;
 }
 
@@ -44,36 +52,42 @@ namespace {
   };
   struct JniLongFieldSetter {
     JniLongFieldSetter(JNIEnv* env_, jobject obj_, jfieldID fieldID_,
-      jlong value)
+                       jlong value)
       : env(env_), obj(obj_), fieldID(fieldID_),
-      oldValue(env->GetLongField(obj, fieldID))
+        oldValue(env->GetLongField(obj, fieldID)),
+        error(env->ExceptionCheck() == JNI_TRUE)
     {
-      env->SetLongField(obj, fieldID, value);
+     if (error) {
+       ::error("GetLongField()", "unknown");
+       return;
+     }
+     env->SetLongField(obj, fieldID, value);
+     if ((error = (env->ExceptionCheck() == JNI_TRUE)))
+       ::error("SetLongField()", "unknown");
     }
-    ~JniLongFieldSetter() { env->SetLongField(obj, fieldID, oldValue); }
+    ~JniLongFieldSetter()
+    { if (!error) env->SetLongField(obj, fieldID, oldValue); }
     JNIEnv* env;
     jobject obj;
     jfieldID fieldID;
     jlong oldValue;
+    bool error;
   };
   struct JniMonitor {
     JniMonitor(JNIEnv* env_, jobject obj_, bool enter_)
-      : env(env_), obj(obj_), enter(enter_)
-    {
-      toggleMonitor(enter);
+      : env(env_), obj(obj_), enter(enter_), error(!toggleMonitor(enter)) {}
+    ~JniMonitor() {
+      bool restoredMonitor = error || toggleMonitor(!enter);
+      assert(restoredMonitor);
     }
-    ~JniMonitor() { toggleMonitor(!enter); }
-    void toggleMonitor(bool enter) {
-      if (enter) {
-        if (env->MonitorEnter(obj)) error("MonitorEnter", "unknown");
-      }
-      else {
-        assert(!env->MonitorExit(obj));
-      }
+    bool toggleMonitor(bool enter) {
+      jint rv = enter ? env->MonitorEnter(obj) : env->MonitorExit(obj);
+      return (rv < 0) ? ::error(enter ? "MonitorEnter" : "MonitorExit", "unknown")
+                      : true;
     }
     JNIEnv* env;
     jobject obj;
-    bool enter;
+    bool enter, error;
   };
 }
 
@@ -93,72 +107,86 @@ namespace {
 namespace {
   struct Fd {
     Fd(int fd_) : fd(fd_) {}
-    ~Fd() { close(fd); }
+    ~Fd() { if (fd >= 0) close(fd); }
     int fd;
   };
 }
 #endif
 
-static jfieldID eventHandleID = 0;
-static bool loadEventHandleID(JNIEnv* env, jobject nativeTask) {
-  if (!eventHandleID) {
-    JniObject clazz(env, env->GetObjectClass(nativeTask));
-    eventHandleID = env->GetFieldID((jclass)clazz.obj, "eventHandle", "J");
-  }
-  return eventHandleID != 0;
+static bool loadEventHandleID(JNIEnv* env, jobject nativeTask,
+                              jfieldID* eventHandleID) {
+  jclass clazz = env->GetObjectClass(nativeTask);
+  if (!clazz) return error("GetObjectClass(nativeTask)", "unknown");
+  JniObject cleanup(env, clazz);
+  jfieldID id = env->GetFieldID(clazz, "eventHandle", "J");
+  *eventHandleID = id;
+  return id ? true : error("GetFieldID(\"eventHandle\")", "unknown");
 }
 
 extern "C" JNIEXPORT void JNICALL
 Java_NativeTask_wakeupTask0(JNIEnv* env, jobject this_)
 {
-  if (!loadEventHandleID(env, this_)) return;
+  jfieldID eventHandleID = 0;
+  if (!loadEventHandleID(env, this_, &eventHandleID)) return;
   JniMonitor enter(env, this_, true);
-#ifdef WIN32
-  HANDLE eventHandle = reinterpret_cast<HANDLE>(env->GetLongField(this_, eventHandleID));
-  if (eventHandle && !SetEvent(eventHandle))
-    error("SetEvent", GetLastError());
-#else
-  int fd = (int)env->GetLongField(this_, eventHandleID) - 1;
-  unsigned char dummy[1] = {};
-  if (fd >= 0) {
-    ssize_t rv;
-    while ((rv = write(fd, dummy, sizeof(dummy))) < 0 && errno == EINTR);
-    if (rv != sizeof(dummy)) error("write", errno);
+  if (enter.error) return;
+  jlong eventHandle = env->GetLongField(this_, eventHandleID);
+  if (env->ExceptionCheck() == JNI_TRUE) {
+    error("GetLongField(eventHandleID)", "unknown");
+    return;
   }
+#ifdef WIN32
+  HANDLE h = reinterpret_cast<HANDLE>(eventHandle);
+  if (!h) return; // nothing to wake up
+  if (!SetEvent(h)) error("SetEvent", GetLastError());
+#else
+  assert(eventHandle >= 0);
+  if (eventHandle == 0) return; // nothing to wake up
+  int fd = eventHandle - 1;
+  unsigned char dummy[1] = {};
+  ssize_t rv;
+  while ((rv = write(fd, dummy, sizeof(dummy))) < 0 && errno == EINTR)
+    ;
+  if (rv != sizeof(dummy)) error("write", errno);
 #endif
 }
 
+// Returns JNI_TRUE if and only if we returned early due to a wakeup.
 extern "C" JNIEXPORT jboolean JNICALL
 Java_NativeTask_doTask0(JNIEnv* env, jobject this_)
 {
-  if (!loadEventHandleID(env, this_)) return JNI_FALSE;
+  jfieldID eventHandleID = 0;
+  if (!loadEventHandleID(env, this_, &eventHandleID)) return JNI_FALSE;
 #ifdef WIN32
   Handle eventHandle(CreateEvent(0, TRUE, FALSE, 0));
-  if (!eventHandle.h) return error("CreateEvent", GetLastError());
+  if (!eventHandle.h) return jError("CreateEvent", GetLastError());
   jlong jniHandle = reinterpret_cast<jlong>(eventHandle.h);
 #else
   int fds[2];
-  if (pipe(fds)) return error("pipe", errno);
+  if (pipe(fds)) return jError("pipe", errno);
+  assert(fds[0] >= 0 && fds[1] >= 0);
   Fd readEnd(fds[0]), writeEnd(fds[1]);
-  jlong jniHandle = writeEnd + 1;
+  jlong jniHandle = writeEnd.fd + 1;
 #endif
   JniMonitor enter(env, this_, true);
+  if (enter.error) return JNI_FALSE;
   JniLongFieldSetter setter(env, this_, eventHandleID, jniHandle);
-  if (setter.oldValue != 0) return error("logic", "doTask() is already running");
+  if (setter.error) return JNI_FALSE;
+  if (setter.oldValue != 0) return jError("logic", "doTask() is already running");
   JniMonitor exit(env, this_, false);
+  if (exit.error) return JNI_FALSE;
 
   for (int i = 0; i < 5; ++i) {
 #ifdef WIN32
     switch (WaitForSingleObject(eventHandle.h, 5000)) {
     case WAIT_ABANDONED:
-      return error("WaitForSingleObject", "wait abandonned");
+      return jError("WaitForSingleObject", "wait abandonned");
     case WAIT_OBJECT_0:
       return JNI_TRUE;
-      break;
     case WAIT_TIMEOUT:
       break;
     case WAIT_FAILED:
-      return error("WaitForSingleObject", GetLastError());
+      return jError("WaitForSingleObject", GetLastError());
     }
 #else
     fd_set rfds; FD_ZERO(&rfds); FD_SET(readEnd.fd, &rfds);
@@ -168,16 +196,26 @@ Java_NativeTask_doTask0(JNIEnv* env, jobject this_)
       {
         unsigned char single[1];
         ssize_t rv;
-        while ((rv = read(readEnd.fd, single, sizeof(single))) < 0 && errno == EINTR) ;
+        while ((rv = read(readEnd.fd, single, sizeof(single))) < 0 && errno == EINTR)
+          ;
         assert(rv == sizeof(single));
       }
       return JNI_TRUE;
     case 0:
       break;
     case -1:
-      return error("select", errno);
+      // (If interrupted by a signal, let's say that our long-running native task
+      // has finished successfully. We return JNI_FALSE since we weren't interrupted
+      // by the Java wakeup() mechanism.)
+      if (errno == EINTR)
+        return JNI_FALSE;
+      return jError("select", errno);
+    default:
+      assert(false);
+      return jError("select", "bad return");
     }
 #endif
   }
   return JNI_FALSE;
 }
+

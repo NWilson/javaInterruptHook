@@ -1,6 +1,7 @@
 public class Harness {
 
 	public static void main(String[] args) {
+		System.out.println("======== Programme output ========");
 		final NativeTask t = new NativeTask();
 		final Thread thr = Thread.currentThread();
 		(new Thread(new Runnable() {
@@ -18,6 +19,7 @@ public class Harness {
 		} catch (InterruptedException e) {
 			System.out.println("Thread interrupted!");
 		}
+		System.out.println("==================================");
 	}
 
 }

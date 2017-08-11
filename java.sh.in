@@ -5,8 +5,9 @@ BIN="@CMAKE_CURRENT_BINARY_DIR@"
 SRC="@CMAKE_CURRENT_SOURCE_DIR@"
 JAVAC="@Java_JAVAC_EXECUTABLE@"
 JAVA="@Java_JAVA_EXECUTABLE@"
-DLL=`find "$BIN" -name interrupt.dll`
+DLL=`find "$BIN/lib" -type f` # platform-dependent: libinterrupt.so or interrupt.dll
 DLL=`dirname "$DLL"`
 
-"$JAVAC" -Werror -d "$BIN" "$SRC/classes/*.java"
-"$JAVA" -classpath "$BIN" -Djava.library.path="$DLL" -Xcheck:jni Harness
+mkdir -p "$BIN/classes"
+"$JAVAC" -Werror -d "$BIN/classes" "$SRC"/java/*.java
+"$JAVA" -classpath "$BIN/classes" -Djava.library.path="$DLL" -Xcheck:jni Harness
