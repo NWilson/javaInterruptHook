@@ -1,0 +1,2 @@
+language: c java
+script: mkdir bld && cd bld && cmake .. && cmake --build . && ./java.sh
