@@ -1,3 +1,5 @@
+[![Build Status](https://travis-ci.org/NWilson/javaInterruptHook.svg?branch=master)](https://travis-ci.org/NWilson/javaInterruptHook)
+
 # How to write native Java methods which respond to `Thread.interrupt()`
 
 This is a tutorial project, demonstrating how to hook a Java thread's `interrupt()`
